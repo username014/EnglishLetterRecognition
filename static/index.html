@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Letter Recognition</title>
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --card: #141414;
+            --primary: #ff2a2a;
+            --primary-dark: #cc0000;
+            --text: #e0e0e0;
+            --text-muted: #888888;
+            --border: #333333;
+            --success: #ff2a2a;
+            --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.5);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Times New Roman', Times, serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        h1 { margin: 0 0 20px; font-size: 2rem; font-weight: 700; color: var(--primary); }
+        .container {
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: flex-start;
+            max-width: 1000px;
+            width: 100%;
+        }
+        .canvas-wrapper {
+            background: var(--card);
+            padding: 16px;
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border: 1px solid var(--border);
+        }
+        canvas {
+            background: #ffffff;
+            border: 2px solid var(--primary);
+            cursor: crosshair;
+            touch-action: none;
+            border-radius: 8px;
+            image-rendering: pixelated;
+        }
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            width: 100%;
+        }
+        button {
+            padding: 8px 16px;
+            font-size: 14px;
+            font-family: 'Times New Roman', Times, serif;
+            font-weight: 700;
+            cursor: pointer;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            transition: 0.2s;
+            flex: 1;
+        }
+        button:hover { background: var(--primary-dark); }
+        button:active { transform: translateY(1px); }
+
+        #shutdownBtn {
+            background: #330000;
+            border: 1px solid var(--primary-dark);
+            margin-top: 12px;
+            width: 100%;
+        }
+        #shutdownBtn:hover { background: var(--primary-dark); }
+
+        #results {
+            background: var(--card);
+            padding: 16px;
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            width: 320px;
+            max-height: 65vh;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+        }
+        #results h3 { margin: 0 0 12px; font-size: 1.2rem; color: var(--primary); }
+        .bar-container {
+            display: flex;
+            align-items: center;
+            margin: 4px 0;
+            font-size: 14px;
+        }
+        .letter {
+            width: 24px;
+            font-weight: 700;
+            color: var(--text-muted);
+        }
+        .bar-bg {
+            flex: 1;
+            height: 8px;
+            background: #2a2a2a;
+            border-radius: 4px;
+            margin: 0 10px;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), #ff6666);
+            width: 0%;
+            transition: width 0.2s ease;
+            border-radius: 4px;
+        }
+        .prob {
+            width: 42px;
+            text-align: right;
+            font-weight: 500;
+            color: var(--text-muted);
+        }
+        .top-1 .letter,
+        .top-1 .prob {
+            color: var(--primary);
+            font-weight: 700;
+        }
+        .status {
+            margin-top: 12px;
+            font-size: 14px;
+            color: var(--text-muted);
+            min-height: 20px;
+            text-align: center;
+            font-style: italic;
+        }
+        .confidence-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: var(--primary);
+            color: white;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 700;
+            margin-left: 6px;
+        }
+
+        @media (max-width: 700px) {
+            .container { flex-direction: column; align-items: center; }
+            #results { width: 100%; max-width: 340px; }
+        }
+    </style>
+</head>
+<body>
+    <h1>Распознавание английских букв</h1>
+
+    <div class="container">
+        <div class="canvas-wrapper">
+            <canvas id="drawCanvas" width="300" height="300"></canvas>
+            <div class="controls">
+                <button id="clearBtn">Очистить</button>
+                <button id="undoBtn">Отменить</button>
+            </div>
+            <button id="shutdownBtn">Завершить работу сервера</button>
+            <div class="status" id="status">Нарисуйте букву</div>
+        </div>
+
+        <div id="results">
+            <h3>Вероятности</h3>
+            <div id="bars"></div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('drawCanvas');
+        const ctx = canvas.getContext('2d');
+        const clearBtn = document.getElementById('clearBtn');
+        const undoBtn = document.getElementById('undoBtn');
+        const shutdownBtn = document.getElementById('shutdownBtn');
+        const barsContainer = document.getElementById('bars');
+        const statusEl = document.getElementById('status');
+        const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+
+        ctx.lineWidth = 12;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.strokeStyle = '#ff2a2a';
+
+        let history = [];
+        let isDrawing = false;
+        let lastSendTime = 0;
+        const THROTTLE_MS = 300;
+
+        letters.forEach(l => {
+            const div = document.createElement('div');
+            div.className = 'bar-container';
+            div.innerHTML = `
+                <span class="letter">${l}</span>
+                <div class="bar-bg"><div class="bar-fill" id="bar-${l}"></div></div>
+                <span class="prob" id="prob-${l}">0%</span>
+            `;
+            barsContainer.appendChild(div);
+        });
+
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.touches ? e.touches[0].clientX : e.clientX;
+            const cy = e.touches ? e.touches[0].clientY : e.clientY;
+            return {
+                x: (cx - rect.left) * (canvas.width / rect.width),
+                y: (cy - rect.top) * (canvas.height / rect.height)
+            };
+        }
+
+        function saveState() {
+            history.push(canvas.toDataURL());
+            if (history.length > 20) history.shift();
+        }
+
+        canvas.addEventListener('mousedown', e => {
+            isDrawing = true;
+            saveState();
+            const p = getPos(e);
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (!isDrawing) return;
+            const p = getPos(e);
+            ctx.lineTo(p.x, p.y);
+            ctx.stroke();
+            throttledPredict();
+        });
+
+        canvas.addEventListener('mouseup', () => { isDrawing = false; sendPrediction(); });
+        canvas.addEventListener('mouseleave', () => { isDrawing = false; });
+
+        canvas.addEventListener('touchstart', e => {
+            e.preventDefault();
+            isDrawing = true;
+            saveState();
+            const p = getPos(e);
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+        });
+        canvas.addEventListener('touchmove', e => {
+            e.preventDefault();
+            if (!isDrawing) return;
+            const p = getPos(e);
+            ctx.lineTo(p.x, p.y);
+            ctx.stroke();
+            throttledPredict();
+        });
+        canvas.addEventListener('touchend', e => {
+            e.preventDefault();
+            isDrawing = false;
+            sendPrediction();
+        });
+
+        clearBtn.addEventListener('click', () => {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            history = [];
+            resetBars();
+            statusEl.textContent = 'Холст очищен. Нарисуйте букву';
+        });
+
+        undoBtn.addEventListener('click', () => {
+            if (history.length > 1) {
+                history.pop();
+                const img = new Image();
+                img.src = history[history.length - 1];
+                img.onload = () => {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0);
+                    sendPrediction();
+                };
+            } else if (history.length === 1) {
+                clearBtn.click();
+            }
+        });
+
+        shutdownBtn.addEventListener('click', async () => {
+            if (confirm('Вы уверены, что хотите остановить сервер?')) {
+                statusEl.textContent = 'Остановка сервера...';
+                statusEl.style.color = '#ff2a2a';
+                try {
+                    await fetch('/shutdown', { method: 'POST' });
+                    statusEl.textContent = 'Сервер остановлен. Вы можете закрыть вкладку';
+                } catch (err) {
+                    statusEl.textContent = 'Соединение разорвано. Сервер остановлен';
+                }
+            }
+        });
+
+        function throttledPredict() {
+            const now = Date.now();
+            if (now - lastSendTime > THROTTLE_MS) {
+                lastSendTime = now;
+                sendPrediction();
+            }
+        }
+
+        async function sendPrediction() {
+            const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+            const hasContent = pixels.some((p, i) => {
+                if (i % 4 === 3) return false;
+                return p < 250;
+            });
+
+            if (!hasContent) {
+                resetBars();
+                statusEl.textContent = 'Нарисуйте букву';
+                statusEl.style.color = 'var(--text-muted)';
+                return;
+            }
+
+            statusEl.textContent = 'Анализ...';
+            statusEl.style.color = 'var(--primary)';
+
+            try {
+                const response = await fetch('/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: canvas.toDataURL('image/png') })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    statusEl.textContent = `Ошибка: ${data.error}`;
+                    statusEl.style.color = '#ff2a2a';
+                    return;
+                }
+
+                updateBars(data.probabilities);
+
+                if (data.top_prediction) {
+                    const badge = `<span class="confidence-badge">${data.confidence}%</span>`;
+                    statusEl.innerHTML = `<strong>${data.top_prediction}</strong> ${badge}`;
+                    statusEl.style.color = 'var(--text)';
+                }
+            } catch (err) {
+                statusEl.textContent = 'Ошибка соединения с сервером';
+                statusEl.style.color = '#ff2a2a';
+                console.error('Prediction error:', err);
+            }
+        }
+
+        function updateBars(probs) {
+            let maxProb = 0, maxLetter = '';
+
+            for (const [letter, prob] of Object.entries(probs)) {
+                const bar = document.getElementById(`bar-${letter}`);
+                const probText = document.getElementById(`prob-${letter}`);
+                const container = bar.parentElement.parentElement;
+
+                bar.style.width = `${prob}%`;
+                probText.textContent = `${prob}%`;
+                container.classList.remove('top-1');
+
+                if (prob > maxProb) {
+                    maxProb = prob;
+                    maxLetter = letter;
+                }
+            }
+
+            if (maxProb > 10) {
+                document.getElementById(`bar-${maxLetter}`)
+                    .parentElement.parentElement.classList.add('top-1');
+            }
+        }
+
+        function resetBars() {
+            letters.forEach(l => {
+                document.getElementById(`bar-${l}`).style.width = '0%';
+                document.getElementById(`prob-${l}`).textContent = '0%';
+                document.getElementById(`bar-${l}`).parentElement.parentElement.classList.remove('top-1');
+            });
+        }
+
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    </script>
+</body>
+</html>
