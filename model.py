@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse
 from PIL import Image
 from torchvision import transforms
 
+from utils.adversarial import AdversarialTTA
 from utils.model_arch import ImprovedLetterCNN
 from utils.augmentations import get_tta_transforms
 
@@ -95,6 +96,13 @@ def load_model():
 
     model.eval()
     print(f"Model ready on {DEVICE}")
+    adv_tta_processor = AdversarialTTA(
+        model=model,
+        device=DEVICE,
+        epsilon=0.03,
+        n_adv=3,
+        attack_type='fgsm'
+    )
     return model
 
 
@@ -146,9 +154,8 @@ def preprocess_base64(base64_str: str, device: torch.device, use_tta: bool = Fal
         return tta_tensors
     else:
         tensor = torch.from_numpy(resized).float() / 255.0
-        tensor = 1.0 - tensor
         tensor = torch.rot90(tensor, k=1, dims=[-2, -1])
-        tensor = torch.flip(tensor, dims=[1])
+        tensor = torch.flip(tensor, dims=[-1])
         tensor = tensor.unsqueeze(0).unsqueeze(0)
         tensor = tensor.to(device)
         return normalize_emnist(tensor, device)
@@ -172,9 +179,9 @@ async def predict(req: Request):
         if not img_b64:
             return {"error": "No image provided", "probabilities": {}}
 
-        tensors = preprocess_base64(img_b64, DEVICE, use_tta=CONFIG["use_tta"])
+        tensor = preprocess_base64(img_b64, DEVICE, use_tta=False)
 
-        if tensors is None:
+        if tensor is None:
             return {
                 "probabilities": {l: 0.0 for l in LETTERS},
                 "top_prediction": None,
@@ -182,11 +189,11 @@ async def predict(req: Request):
             }
 
         with torch.no_grad():
-            if CONFIG["use_tta"] and isinstance(tensors, list):
-                probs_list = [F.softmax(model(t), dim=1).squeeze() for t in tensors]
-                probs_tensor = torch.stack(probs_list).mean(dim=0)
+            if CONFIG["use_tta"]:
+                avg_logits = adv_tta_processor.predict(tensor)
+                probs_tensor = F.softmax(avg_logits, dim=1).squeeze()
             else:
-                logits = model(tensors)
+                logits = model(tensor)
                 probs_tensor = F.softmax(logits, dim=1).squeeze()
 
         probs_np = probs_tensor.cpu().numpy()
@@ -203,7 +210,7 @@ async def predict(req: Request):
             "probabilities": probs_dict,
             "top_prediction": top_letter,
             "confidence": top_conf,
-            "tta_used": CONFIG["use_tta"] and isinstance(tensors, list)
+            "tta_used": CONFIG["use_tta"]
         }
 
     except Exception as e:

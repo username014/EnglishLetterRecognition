@@ -13,7 +13,7 @@ from pathlib import Path
 from collections import Counter
 
 from utils.model_arch import ImprovedLetterCNN
-from utils.adversarial import SelfAdversarialTrainer
+from utils.adversarial import AdversarialTTA, SelfAdversarialTrainer
 from utils.augmentations import get_train_transforms, get_val_transforms, get_tta_transforms
 
 BASE_CONFIG = {
@@ -154,25 +154,26 @@ def validate_standard(model, loader, device):
     return acc, class_acc, confusion.most_common(3)
 
 
-def validate_with_tta(model, val_ds_raw, device, tta_transforms, batch_size=128):
+def validate_with_adv_tta(model, loader, device, exp_cfg, batch_size=128):
+    adv_tta = AdversarialTTA(
+        model=model,
+        device=device,
+        epsilon=exp_cfg.get('epsilon', 0.03),
+        n_adv=exp_cfg.get('n_adversarial', 3),
+        attack_type=exp_cfg.get('attack_type', 'fgsm'),
+        pgd_steps=exp_cfg.get('pgd_steps', 5)
+    )
+
     model.eval()
     correct, total = 0, 0
     class_correct, class_total = torch.zeros(NUM_CLASSES), torch.zeros(NUM_CLASSES)
     confusion = Counter()
 
-    indices = torch.arange(len(val_ds_raw))
-    for i in range(0, len(indices), batch_size):
-        batch_idx = indices[i:i + batch_size]
-        pil_images = [val_ds_raw[idx][0] for idx in batch_idx]
-        labels = torch.tensor([val_ds_raw[idx][1] for idx in batch_idx], device=device) - 1
+    for imgs, labels in loader:
+        labels = labels - 1
+        imgs, labels = imgs.to(device), labels.to(device)
 
-        batch_logits = []
-        with torch.no_grad():
-            for t in tta_transforms:
-                transformed_batch = torch.stack([t(img) for img in pil_images]).to(device)
-                batch_logits.append(model(transformed_batch))
-
-        avg_logits = torch.stack(batch_logits).mean(dim=0)
+        avg_logits = adv_tta.predict(imgs)
         preds = avg_logits.argmax(dim=1)
 
         correct += (preds == labels).sum().item()
@@ -223,7 +224,7 @@ def run_experiment(exp_cfg, master_writer):
         avg_loss = total_loss / batches if batches > 0 else float('inf')
 
         if use_tta:
-            val_acc, class_acc, top_confused = validate_with_tta(model, val_ds_raw, device, tta_transforms)
+            val_acc, class_acc, top_confused = validate_with_adv_tta(model, val_loader, device, exp_cfg)
         else:
             val_acc, class_acc, top_confused = validate_standard(model, val_loader, device)
 
@@ -267,7 +268,7 @@ if __name__ == "__main__":
         print(f"  [{i:2d}] {exp['name']}")
     print()
 
-    start_idx = 56
+    start_idx = 0
     if args.resume:
         for i, exp in enumerate(EXPERIMENTS):
             if not get_weight_path(exp).exists():
